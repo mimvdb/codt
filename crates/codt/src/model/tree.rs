@@ -54,3 +54,12 @@ pub struct LeafNode<OT: OptimizationTask> {
     pub cost: OT::CostType,
     pub label: OT::LabelType,
 }
+
+impl<OT: OptimizationTask> Clone for LeafNode<OT> {
+    fn clone(&self) -> Self {
+        Self {
+            cost: self.cost,
+            label: self.label,
+        }
+    }
+}

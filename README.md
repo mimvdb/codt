@@ -17,3 +17,6 @@ To profile the program using samply follow the following steps.
 The python bindings use [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin).
 
 The quickstart executes an example in release mode. Alternatively, run `uv run --config-setting 'build-args=--profile=dev' examples/simple.py` to build in debug mode for faster build times.
+
+## Multithreading
+You can use the `RAYON_NUM_THREADS` environment variable to control the maximum number of threads used.

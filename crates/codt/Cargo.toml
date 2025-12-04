@@ -16,3 +16,5 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 fenwick = { workspace = true }
 segment-tree = { workspace = true }
+rayon = { workspace = true }
+thread_local = { workspace = true }

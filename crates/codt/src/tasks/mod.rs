@@ -14,6 +14,8 @@ pub trait CostSum<LabelType, InstanceType, CostType>:
     + for<'a> SubAssign<&'a Self>
     + for<'a> SubAssign<&'a InstanceType>
     + Clone
+    + Send
+    + Sync
 {
     fn label(&self) -> LabelType;
     fn cost(&self) -> CostType;
@@ -29,6 +31,8 @@ pub trait Cost:
     + Add<Output = Self>
     + Sub<Output = Self>
     + TryInto<f64, Error: Debug>
+    + Send
+    + Sync
 {
     /// The minimum possible cost, to e.g. initialize lower bounds. Requires that ZERO_COST + ZERO_COST = ZERO_COST. For example 0 or 0.0
     const ZERO: Self;
@@ -116,14 +120,14 @@ impl Cost for FloatCost {
 
 pub trait OptimizationTask {
     /// The label type, e.g. a class label for classification tasks, or a regression target for regression tasks.
-    type LabelType: Clone + Copy + Display;
+    type LabelType: Clone + Copy + Display + Send + Sync;
     /// The instance type. For classification and regression, each instance only has a label, see `LabeledInstance`.
-    type InstanceType: Instance;
+    type InstanceType: Instance + Send + Sync;
     type CostType: Cost;
     /// A type from which the cost is easily derivable. When a CostSum for disjoint datasets
     /// are summed, it results in the CostSum of their union.
     type CostSumType: CostSum<Self::LabelType, Self::InstanceType, Self::CostType>;
-    type ExtraDataviewData;
+    type ExtraDataviewData: Send + Sync;
 
     fn preprocess_dataset(dataset: &mut DataSet<Self::InstanceType>) {
         let _ = dataset;
