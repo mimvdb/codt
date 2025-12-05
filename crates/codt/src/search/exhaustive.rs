@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ops::{AddAssign, Range},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
 };
 
 use fenwick::index::zero_based;
@@ -334,14 +334,12 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
         right_leaf: None,
     };
 
-    let left_done = left_tracker.is_optimal(branching_cost);
-    let right_done = right_tracker.is_optimal(branching_cost);
+    let left_done = AtomicBool::new(left_tracker.is_optimal(branching_cost));
+    let right_done = AtomicBool::new(right_tracker.is_optimal(branching_cost));
 
     struct X<OT: OptimizationTask> {
         left_tracker: D1ScoreTracker<OT>,
         right_tracker: D1ScoreTracker<OT>,
-        left_done: bool,
-        right_done: bool,
     }
 
     impl<OT: OptimizationTask> Clone for X<OT> {
@@ -349,8 +347,6 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
             Self {
                 left_tracker: self.left_tracker.clone(),
                 right_tracker: self.right_tracker.clone(),
-                left_done: self.left_done,
-                right_done: self.right_done,
             }
         }
     }
@@ -358,8 +354,6 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
     let state = X::<OT> {
         left_tracker,
         right_tracker,
-        left_done,
-        right_done,
     };
 
     let tl = ThreadLocal::new();
@@ -372,7 +366,12 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
                 .lock()
                 .expect("Threadlocal state accessed once");
 
-            if state.left_done && state.right_done {
+            // Loading the atomic is a significant performance penalty, only do it sometimes to check if a different feature has found the ideal left/right split.
+            let mut left_done_local = left_done.load(Ordering::SeqCst);
+            let mut right_done_local = right_done.load(Ordering::SeqCst);
+            let mut done_update_counter = 0;
+
+            if left_done_local && right_done_local {
                 return true;
             }
 
@@ -390,16 +389,24 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
             let mut total_right_right = total_left.clone();
 
             for instance in dataview.instances_iter(feature_2) {
-                if left_done && right_done {
+                if done_update_counter > 100 {
+                    done_update_counter = 0;
+                    left_done_local |= left_done.load(Ordering::SeqCst);
+                    right_done_local |= right_done.load(Ordering::SeqCst);
+                }
+                done_update_counter += 1;
+
+                if left_done_local && right_done_local {
                     return true;
                 }
 
-                let feature1_value = dataview.dataset.feature_values[feature][instance.instance_id];
+                // SAFETY: These are never out of bounds. This has a measurable performance difference. 
+                let feature1_value = unsafe { *dataview.dataset.feature_values.get_unchecked(feature).get_unchecked(instance.instance_id) };
                 let feature2_value = instance.feature_value;
                 if feature1_value <= split_value {
                     // Check if this is a point we can split at
                     if let Some(prev_left_feature_value) = prev_left_feature_value {
-                        if !left_done && prev_left_feature_value != feature2_value {
+                        if !left_done_local && prev_left_feature_value != feature2_value {
                             total_left_right.clone_from(&total_left);
                             total_left_right -= &total_left_left;
 
@@ -412,7 +419,11 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
                                 feature2_value,
                                 &dataview.dataset.internal_to_original_feature_value[feature_2],
                             );
-                            state.left_done |= state.left_tracker.is_optimal(branching_cost);
+
+                            if state.left_tracker.is_optimal(branching_cost) {
+                                left_done.store(true, Ordering::SeqCst);
+                                left_done_local = true;
+                            }
                         }
                     }
                     total_left_left += &dataview.dataset.instances[instance.instance_id];
@@ -420,7 +431,7 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
                 } else {
                     // Check if this is a point we can split at
                     if let Some(prev_right_feature_value) = prev_right_feature_value {
-                        if !right_done && prev_right_feature_value != feature2_value {
+                        if !right_done_local && prev_right_feature_value != feature2_value {
                             total_right_right.clone_from(&total_right);
                             total_right_right -= &total_right_left;
 
@@ -433,7 +444,10 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
                                 feature2_value,
                                 &dataview.dataset.internal_to_original_feature_value[feature_2],
                             );
-                            state.right_done |= state.right_tracker.is_optimal(branching_cost);
+                            if state.right_tracker.is_optimal(branching_cost) {
+                                right_done.store(true, Ordering::SeqCst);
+                                right_done_local = true;
+                            }
                         }
                     }
                     total_right_left += &dataview.dataset.instances[instance.instance_id];
@@ -441,7 +455,7 @@ pub fn solve_left_right<'a, OT: OptimizationTask, SS: SearchStrategy>(
                 }
             }
 
-            left_done && right_done
+            left_done_local && right_done_local
         })
         .any(|x| x); // The .any() terminates other running tasks early if left and right are optimal in some other task.
 
